@@ -53,13 +53,9 @@ def _bootstrap_public_assets_if_empty() -> None:
         shutil.copytree(source_listings, target_listings)
         return
 
-    try:
-        has_any_file = any(target_listings.rglob("*"))
-    except OSError:
-        has_any_file = False
-
-    if not has_any_file:
-        shutil.copytree(source_listings, target_listings, dirs_exist_ok=True)
+    # Synchronise aussi quand le volume persistant existe deja:
+    # merge/copie les nouvelles images seed du repo vers /var/data/public/listings.
+    shutil.copytree(source_listings, target_listings, dirs_exist_ok=True)
 
 
 def _seed_db_from_repo_snapshot_if_empty() -> int:

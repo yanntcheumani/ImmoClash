@@ -166,6 +166,36 @@ score = max(0, round(1000 * exp(-3 * erreur%))) - malusIndices
 - Filtrage force: **appartements en location uniquement**.
 - Les champs varient selon les annonces disponibles (adresse/surface/pieces non garanties).
 
+## Precharger 30 vraies annonces (avec images) pour la prod
+
+Si tu veux que la prod ait deja un dataset jouable meme sans scraping live:
+
+1. Lance un scraping seed local:
+
+```bash
+python3 server/scripts/scrape_seed.py --count 30 --batch 8 --max-runs 25
+```
+
+2. Cela met a jour:
+- `data/listings.json` (30 annonces reelles),
+- `public/listings/<id>/*` (images telechargees).
+
+3. Commit/push ces fichiers dans le repo:
+
+```bash
+git add data/listings.json public/listings
+git commit -m "Seed 30 real listings with images"
+git push
+```
+
+4. Redeploie Render. Au startup, le backend synchronise les images du repo vers le volume persistant.
+
+5. Optionnel: forcer la seed fallback si besoin:
+
+```bash
+curl -X POST "https://<ton-backend>.onrender.com/api/admin/seed-fallback"
+```
+
 ## API HTTP
 
 - `GET /api/health`
