@@ -277,8 +277,22 @@ class RoomManager:
             count=rounds_count,
             mode=price_mode,
             exclude_ids=used_listing_ids,
+            require_images=True,
         )
         reused_seen_listings = False
+
+        # Si le stock avec images est insuffisant, on complète sans contrainte image.
+        if len(listings) < rounds_count:
+            already_selected_ids = {listing.id for listing in listings}
+            listings.extend(
+                get_random_listings(
+                    db_path=self.db_path,
+                    count=rounds_count - len(listings),
+                    mode=price_mode,
+                    exclude_ids=used_listing_ids | already_selected_ids,
+                    require_images=False,
+                )
+            )
 
         # Mode secours prod: si rien d'inédit n'est dispo, on autorise temporairement
         # la réutilisation d'anciennes annonces pour ne pas bloquer le démarrage.
@@ -288,7 +302,19 @@ class RoomManager:
                 count=rounds_count,
                 mode=price_mode,
                 exclude_ids=set(),
+                require_images=True,
             )
+            if len(listings) < rounds_count:
+                already_selected_ids = {listing.id for listing in listings}
+                listings.extend(
+                    get_random_listings(
+                        db_path=self.db_path,
+                        count=rounds_count - len(listings),
+                        mode=price_mode,
+                        exclude_ids=already_selected_ids,
+                        require_images=False,
+                    )
+                )
             reused_seen_listings = len(listings) > 0
 
         if len(listings) == 0:

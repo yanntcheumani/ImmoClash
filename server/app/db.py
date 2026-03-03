@@ -126,7 +126,13 @@ def get_listing_by_id(db_path: Path, listing_id: str) -> Listing | None:
     return row_to_listing(row)
 
 
-def get_random_listings(db_path: Path, count: int, mode: str, exclude_ids: set[str]) -> list[Listing]:
+def get_random_listings(
+    db_path: Path,
+    count: int,
+    mode: str,
+    exclude_ids: set[str],
+    require_images: bool = False,
+) -> list[Listing]:
     sql = "SELECT * FROM listings WHERE 1=1"
     params: list = []
 
@@ -140,6 +146,9 @@ def get_random_listings(db_path: Path, count: int, mode: str, exclude_ids: set[s
         placeholders = ",".join("?" for _ in exclude_ids)
         sql += f" AND id NOT IN ({placeholders})"
         params.extend(sorted(exclude_ids))
+
+    if require_images:
+        sql += " AND images_json IS NOT NULL AND images_json <> '[]'"
 
     sql += " ORDER BY RANDOM() LIMIT ?"
     params.append(count)
@@ -156,6 +165,7 @@ def get_random_listings_from_ids(
     count: int,
     mode: str,
     exclude_ids: set[str],
+    require_images: bool = False,
 ) -> list[Listing]:
     if not ids:
         return []
@@ -174,6 +184,9 @@ def get_random_listings_from_ids(
         placeholders = ",".join("?" for _ in exclude_ids)
         sql += f" AND id NOT IN ({placeholders})"
         params.extend(sorted(exclude_ids))
+
+    if require_images:
+        sql += " AND images_json IS NOT NULL AND images_json <> '[]'"
 
     sql += " ORDER BY RANDOM() LIMIT ?"
     params.append(count)

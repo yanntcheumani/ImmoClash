@@ -84,9 +84,9 @@ Le repo contient `render.yaml` configure pour:
 - stocker DB + images dans ce volume:
   - `IMMOCLASH_DB_PATH=/var/data/immo_clash.db`
   - `IMMOCLASH_PUBLIC_DIR=/var/data/public`
-- au premier demarrage si la DB persistante est vide:
+- au demarrage:
   - seed automatique depuis `data/immo_clash.db` du repo
-  - sinon seed automatique depuis `data/listings.json`
+  - sync automatique depuis `data/listings.json` (meme si la DB existe deja)
   - puis complementation automatique jusqu'a **30 locations minimum** (seed de secours)
   - copie automatique de `public/listings` vers le volume persistent
 
@@ -163,6 +163,7 @@ score = max(0, round(1000 * exp(-3 * erreur%))) - malusIndices
   - `craigslist_rss` (fallback robuste via flux RSS)
   - `craigslist` (fallback auto)
 - Fallback automatique: si un provider ne ramene pas assez d'annonces valides, le serveur passe au suivant.
+- Pour une recherche FR, le scraping essaie aussi automatiquement d'autres grandes villes (Marseille, Nantes, Lyon, etc.) pour eviter un pool trop limite.
 - Filtrage force: **appartements en location uniquement**.
 - Les champs varient selon les annonces disponibles (adresse/surface/pieces non garanties).
 

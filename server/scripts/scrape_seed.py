@@ -19,12 +19,18 @@ from app.scraper import scrape_and_store_live_listings  # noqa: E402
 
 DEFAULT_QUERIES = [
     "Paris, France",
-    "Lyon, France",
     "Marseille, France",
+    "Nantes, France",
+    "Lyon, France",
+    "Toulouse, France",
     "Bordeaux, France",
     "Lille, France",
-    "Nantes, France",
-    "Toulouse, France",
+    "Rennes, France",
+    "Montpellier, France",
+    "Strasbourg, France",
+    "Nice, France",
+    "Grenoble, France",
+    "Reims, France",
 ]
 
 

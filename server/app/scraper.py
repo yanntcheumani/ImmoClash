@@ -25,6 +25,19 @@ _CITY_TO_SITE = {
     "toulouse": "paris",
 }
 
+_FR_FALLBACK_QUERIES = (
+    "Marseille, France",
+    "Nantes, France",
+    "Lyon, France",
+    "Bordeaux, France",
+    "Lille, France",
+    "Toulouse, France",
+    "Rennes, France",
+    "Montpellier, France",
+    "Strasbourg, France",
+    "Nice, France",
+)
+
 _APT_POSITIVE_HINTS = (
     "appartement",
     "apartment",
@@ -914,6 +927,20 @@ def _providers_order_for_query(search_query: str) -> tuple[str, ...]:
     return SETTINGS.scrape_providers_other
 
 
+def _search_query_variants(search_query: str) -> list[str]:
+    base = (search_query or "").strip()
+    if not base:
+        return ["France"]
+
+    variants = [base]
+    if _guess_country(base) == "FR":
+        for city_query in _FR_FALLBACK_QUERIES:
+            if _normalize_text(city_query) == _normalize_text(base):
+                continue
+            variants.append(city_query)
+    return variants
+
+
 async def scrape_live_listings(
     search_query: str,
     rounds_count: int,
@@ -921,6 +948,7 @@ async def scrape_live_listings(
 ) -> dict[str, Any]:
     target_count = max(rounds_count * SETTINGS.scrape_candidate_multiplier, rounds_count + 2)
     provider_order = _providers_order_for_query(search_query)
+    search_variants = _search_query_variants(search_query)
 
     timeout = httpx.Timeout(SETTINGS.scrape_timeout_seconds)
     headers = {
@@ -935,64 +963,70 @@ async def scrape_live_listings(
     errors: list[str] = []
 
     async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
-        for provider in provider_order:
+        for query in search_variants:
             remaining = target_count - len(collected)
             if remaining <= 0:
                 break
+            for provider in provider_order:
+                remaining = target_count - len(collected)
+                if remaining <= 0:
+                    break
 
-            used_providers.append(provider)
-            needed = max(remaining, rounds_count)
-            stat: dict[str, Any] = {
-                "provider": provider,
-                "requested": needed,
-                "fetched": 0,
-                "accepted": 0,
-                "error": None,
-            }
+                if provider not in used_providers:
+                    used_providers.append(provider)
+                needed = max(remaining, rounds_count)
+                stat: dict[str, Any] = {
+                    "provider": provider,
+                    "query": query,
+                    "requested": needed,
+                    "fetched": 0,
+                    "accepted": 0,
+                    "error": None,
+                }
 
-            try:
-                if provider == "pap":
-                    batch = await _scrape_pap_rental_apartments(
-                        client=client,
-                        search_query=search_query,
-                        needed=needed,
-                        public_dir=public_dir,
-                    )
-                elif provider == "craigslist_rss":
-                    batch = await _scrape_craigslist_rental_apartments_rss(
-                        client=client,
-                        search_query=search_query,
-                        needed=needed,
-                        public_dir=public_dir,
-                    )
-                elif provider == "craigslist":
-                    batch = await _scrape_craigslist_rental_apartments(
-                        client=client,
-                        search_query=search_query,
-                        needed=needed,
-                        public_dir=public_dir,
-                    )
-                else:
+                try:
+                    if provider == "pap":
+                        batch = await _scrape_pap_rental_apartments(
+                            client=client,
+                            search_query=query,
+                            needed=needed,
+                            public_dir=public_dir,
+                        )
+                    elif provider == "craigslist_rss":
+                        batch = await _scrape_craigslist_rental_apartments_rss(
+                            client=client,
+                            search_query=query,
+                            needed=needed,
+                            public_dir=public_dir,
+                        )
+                    elif provider == "craigslist":
+                        batch = await _scrape_craigslist_rental_apartments(
+                            client=client,
+                            search_query=query,
+                            needed=needed,
+                            public_dir=public_dir,
+                        )
+                    else:
+                        batch = []
+                        stat["error"] = "provider_not_supported"
+                except Exception as exc:
                     batch = []
-                    stat["error"] = "provider_not_supported"
-            except Exception as exc:
-                batch = []
-                err_text = f"{provider}:{type(exc).__name__}:{exc}"
-                errors.append(err_text[:400])
-                stat["error"] = err_text[:200]
+                    err_text = f"{provider}:{type(exc).__name__}:{exc}"
+                    errors.append(err_text[:400])
+                    stat["error"] = err_text[:200]
 
-            stat["fetched"] = len(batch)
-            accepted = 0
-            for listing in batch:
-                source_url = str(listing.get("source_url") or "")
-                if source_url and source_url in seen_source:
-                    continue
-                if source_url:
-                    seen_source.add(source_url)
-                collected.append(listing)
-                accepted += 1
-            stat["accepted"] = accepted
-            provider_stats.append(stat)
+                stat["fetched"] = len(batch)
+                accepted = 0
+                for listing in batch:
+                    source_url = str(listing.get("source_url") or "")
+                    if source_url and source_url in seen_source:
+                        continue
+                    if source_url:
+                        seen_source.add(source_url)
+                    collected.append(listing)
+                    accepted += 1
+                stat["accepted"] = accepted
+                provider_stats.append(stat)
 
     return {
         "listings": collected,

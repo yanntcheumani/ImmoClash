@@ -148,12 +148,7 @@ def _normalize_listing_from_json(raw: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _seed_db_from_repo_json_if_empty() -> int:
-    with connect(SETTINGS.db_path) as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM listings").fetchone()
-        if row and int(row["c"]) > 0:
-            return 0
-
+def _sync_db_from_repo_json() -> int:
     json_path: Path = SETTINGS.repo_root / "data" / "listings.json"
     if not json_path.exists():
         return 0
@@ -248,7 +243,7 @@ async def on_startup() -> None:
     _bootstrap_public_assets_if_empty()
     init_db(SETTINGS.db_path)
     _seed_db_from_repo_snapshot_if_empty()
-    _seed_db_from_repo_json_if_empty()
+    _sync_db_from_repo_json()
     _seed_builtin_fallback_if_needed()
 
 
