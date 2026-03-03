@@ -84,6 +84,9 @@ Le repo contient `render.yaml` configure pour:
 - stocker DB + images dans ce volume:
   - `IMMOCLASH_DB_PATH=/var/data/immo_clash.db`
   - `IMMOCLASH_PUBLIC_DIR=/var/data/public`
+- au premier demarrage si la DB persistante est vide:
+  - seed automatique depuis `data/immo_clash.db` du repo
+  - copie automatique de `public/listings` vers le volume persistent
 
 Etapes:
 1. Sur Render, cree un nouveau service via le Blueprint du repo (fichier `render.yaml`).
