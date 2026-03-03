@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from pathlib import Path
 
 import socketio
 from fastapi import FastAPI, HTTPException
@@ -116,11 +117,145 @@ def _seed_db_from_repo_snapshot_if_empty() -> int:
     return inserted
 
 
+def _normalize_listing_from_json(raw: dict[str, object]) -> dict[str, object]:
+    required = ("id", "title", "type", "price", "city", "country", "images")
+    missing = [key for key in required if key not in raw]
+    if missing:
+        raise ValueError(f"listing invalide: champs manquants {', '.join(missing)}")
+
+    listing_id = str(raw["id"])
+    images: list[str] = []
+    for image in raw.get("images", []):  # type: ignore[arg-type]
+        clean = str(image).lstrip("/")
+        if not clean.startswith("listings/"):
+            clean = f"listings/{listing_id}/{clean}"
+        images.append(clean)
+
+    return {
+        "id": listing_id,
+        "title": str(raw["title"]),
+        "type": str(raw["type"]),
+        "price": float(raw["price"]),
+        "currency": str(raw.get("currency", "EUR")),
+        "city": str(raw["city"]),
+        "country": str(raw["country"]),
+        "address": raw.get("address"),
+        "lat": raw.get("lat"),
+        "lng": raw.get("lng"),
+        "surface": raw.get("surface"),
+        "rooms": raw.get("rooms"),
+        "dpe": raw.get("dpe"),
+        "source_url": raw.get("source_url"),
+        "images": images,
+    }
+
+
+def _seed_db_from_repo_json_if_empty() -> int:
+    with connect(SETTINGS.db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM listings").fetchone()
+        if row and int(row["c"]) > 0:
+            return 0
+
+    json_path: Path = SETTINGS.repo_root / "data" / "listings.json"
+    if not json_path.exists():
+        return 0
+
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+
+    if not isinstance(data, list):
+        return 0
+
+    inserted = 0
+    for raw in data:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            listing = _normalize_listing_from_json(raw)
+            upsert_listing(SETTINGS.db_path, listing)
+            inserted += 1
+        except Exception:
+            continue
+
+    return inserted
+
+
+def _seed_builtin_fallback_if_empty() -> int:
+    with connect(SETTINGS.db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM listings").fetchone()
+        if row and int(row["c"]) > 0:
+            return 0
+
+    fallback_listings: list[dict[str, object]] = [
+        {
+            "id": "fallback-rent-paris-01",
+            "title": "Appartement T2 calme proche transports",
+            "type": "rent",
+            "price": 1250,
+            "currency": "EUR",
+            "city": "Paris",
+            "country": "FR",
+            "address": "Paris",
+            "lat": 48.8566,
+            "lng": 2.3522,
+            "surface": 42,
+            "rooms": 2,
+            "dpe": "D",
+            "source_url": None,
+            "images": [],
+        },
+        {
+            "id": "fallback-rent-lyon-02",
+            "title": "Studio meublé centre-ville",
+            "type": "rent",
+            "price": 780,
+            "currency": "EUR",
+            "city": "Lyon",
+            "country": "FR",
+            "address": "Lyon",
+            "lat": 45.764,
+            "lng": 4.8357,
+            "surface": 24,
+            "rooms": 1,
+            "dpe": "C",
+            "source_url": None,
+            "images": [],
+        },
+        {
+            "id": "fallback-rent-bordeaux-03",
+            "title": "T3 lumineux avec balcon",
+            "type": "rent",
+            "price": 990,
+            "currency": "EUR",
+            "city": "Bordeaux",
+            "country": "FR",
+            "address": "Bordeaux",
+            "lat": 44.8378,
+            "lng": -0.5792,
+            "surface": 58,
+            "rooms": 3,
+            "dpe": "C",
+            "source_url": None,
+            "images": [],
+        },
+    ]
+
+    inserted = 0
+    for listing in fallback_listings:
+        upsert_listing(SETTINGS.db_path, listing)
+        inserted += 1
+    return inserted
+
+
 @fastapi_app.on_event("startup")
 async def on_startup() -> None:
     _bootstrap_public_assets_if_empty()
     init_db(SETTINGS.db_path)
     _seed_db_from_repo_snapshot_if_empty()
+    _seed_db_from_repo_json_if_empty()
+    _seed_builtin_fallback_if_empty()
 
 
 @fastapi_app.get("/api/health")
@@ -133,6 +268,23 @@ async def listings_count() -> dict:
     with connect(SETTINGS.db_path) as conn:
         row = conn.execute("SELECT COUNT(*) as c FROM listings").fetchone()
     return {"count": int(row["c"]) if row else 0}
+
+
+@fastapi_app.get("/api/admin/diagnostics")
+async def diagnostics() -> dict:
+    with connect(SETTINGS.db_path) as conn:
+        total = conn.execute("SELECT COUNT(*) as c FROM listings").fetchone()
+        rent = conn.execute("SELECT COUNT(*) as c FROM listings WHERE type='rent'").fetchone()
+    return {
+        "dbPath": str(SETTINGS.db_path),
+        "dbExists": SETTINGS.db_path.exists(),
+        "publicDir": str(SETTINGS.public_dir),
+        "publicDirExists": SETTINGS.public_dir.exists(),
+        "seedSnapshotDbExists": (SETTINGS.repo_root / "data" / "immo_clash.db").exists(),
+        "seedJsonExists": (SETTINGS.repo_root / "data" / "listings.json").exists(),
+        "totalListings": int(total["c"]) if total else 0,
+        "rentListings": int(rent["c"]) if rent else 0,
+    }
 
 
 @fastapi_app.post("/api/admin/scrape")

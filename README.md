@@ -86,6 +86,8 @@ Le repo contient `render.yaml` configure pour:
   - `IMMOCLASH_PUBLIC_DIR=/var/data/public`
 - au premier demarrage si la DB persistante est vide:
   - seed automatique depuis `data/immo_clash.db` du repo
+  - sinon seed automatique depuis `data/listings.json`
+  - sinon seed minimal integre (3 locations de secours)
   - copie automatique de `public/listings` vers le volume persistent
 
 Etapes:
@@ -128,6 +130,7 @@ Puis redeploie le backend Render.
 - Les annonces scrapees sont enregistrees en SQLite.
 - Les images web sont telechargees localement dans `public/listings/<id>/`.
 - A la fin de chaque manche, **seul l'host** peut lancer la manche suivante.
+- Si le pool disponible est plus petit que la config, la partie demarre avec moins de manches (degradation graceful) au lieu d'echouer.
 - Quand la partie est terminee, **l'host peut la relancer** (scores remis a zero, nouveau scraping, annonces deja vues exclues).
 - Le prix mensuel n'est jamais affiche pendant la manche (revele uniquement en fin de manche).
 - Timer autoritaire cote serveur.
@@ -166,6 +169,7 @@ score = max(0, round(1000 * exp(-3 * erreur%))) - malusIndices
 
 - `GET /api/health`
 - `GET /api/admin/listings-count`
+- `GET /api/admin/diagnostics`
 - `POST /api/admin/scrape`
 
 ## Socket.IO events (versionnes)

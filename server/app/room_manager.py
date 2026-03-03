@@ -302,12 +302,16 @@ class RoomManager:
             )
             listings.extend(fallback_listings)
 
-        if len(listings) < rounds_count:
+        if len(listings) == 0:
             raise ValueError(
                 "Pas assez de logements inédits disponibles pour cette room. "
                 f"Trouvé {len(listings)}/{rounds_count}. "
                 "Essaie une autre ville, réduis le nombre de manches, ou relance plus tard."
             )
+
+        total_rounds_for_game = len(listings)
+        if total_rounds_for_game < rounds_count:
+            rounds_count = total_rounds_for_game
 
         async with self.lock:
             room = self.rooms.get(room_code)
@@ -321,6 +325,7 @@ class RoomManager:
                     existing_player.score = 0
 
             room.listing_ids = [listing.id for listing in listings]
+            room.config.rounds_count = rounds_count
             room.phase = "in_round"
             room.round_index = 0
             room.current_round = None
