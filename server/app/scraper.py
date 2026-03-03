@@ -380,58 +380,69 @@ async def _scrape_craigslist_candidates(
     candidates: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
 
-    for page_idx in range(SETTINGS.scrape_max_candidate_pages):
-        offset = page_idx * 120
-        url = (
-            f"{base}/search/{category}?query={quote_plus(search_query)}"
-            f"&sort=date&hasPic=1&s={offset}"
-        )
+    city_only = search_query.split(",")[0].strip()
+    query_variants = [search_query]
+    if city_only and city_only.lower() != search_query.lower():
+        query_variants.append(city_only)
+    if "apartment" not in search_query.lower():
+        query_variants.append(f"{city_only} apartment".strip())
+    if "appartement" not in search_query.lower():
+        query_variants.append(f"{city_only} appartement".strip())
+    query_variants = [query for query in query_variants if query]
 
-        try:
-            response = await client.get(url)
-        except httpx.HTTPError:
-            continue
-
-        if response.status_code >= 400:
-            continue
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        rows = soup.select("li.cl-search-result")
-        if not rows:
-            rows = soup.select("li.result-row")
-
-        for row in rows:
-            link_tag = row.select_one("a[href]")
-            if not link_tag:
-                continue
-            href = str(link_tag.get("href") or "").strip()
-            if not href:
-                continue
-
-            listing_url = _absolute_url(base, href)
-            if listing_url in seen_urls:
-                continue
-            seen_urls.add(listing_url)
-
-            title = link_tag.get_text(" ", strip=True) or "Annonce logement"
-            if not _is_rental_apartment_text(title):
-                continue
-
-            price_tag = row.select_one(".price") or row.select_one(".result-price")
-            price = _parse_price(price_tag.get_text(" ", strip=True) if price_tag else "")
-            if not _is_plausible_rent_price(price):
-                continue
-
-            candidates.append(
-                {
-                    "source_url": listing_url,
-                    "title": title,
-                    "price_hint": price,
-                }
+    for query in query_variants:
+        for page_idx in range(SETTINGS.scrape_max_candidate_pages):
+            offset = page_idx * 120
+            url = (
+                f"{base}/search/{category}?query={quote_plus(query)}"
+                f"&sort=date&hasPic=1&s={offset}"
             )
 
-            if len(candidates) >= needed:
-                return candidates
+            try:
+                response = await client.get(url)
+            except httpx.HTTPError:
+                continue
+
+            if response.status_code >= 400:
+                continue
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            rows = soup.select("li.cl-search-result")
+            if not rows:
+                rows = soup.select("li.result-row")
+
+            for row in rows:
+                link_tag = row.select_one("a[href]")
+                if not link_tag:
+                    continue
+                href = str(link_tag.get("href") or "").strip()
+                if not href:
+                    continue
+
+                listing_url = _absolute_url(base, href)
+                if listing_url in seen_urls:
+                    continue
+                seen_urls.add(listing_url)
+
+                title = link_tag.get_text(" ", strip=True) or "Annonce logement"
+                if not _is_rental_apartment_text(title):
+                    continue
+
+                price_tag = row.select_one(".price") or row.select_one(".result-price")
+                price = _parse_price(price_tag.get_text(" ", strip=True) if price_tag else "")
+                if not _is_plausible_rent_price(price):
+                    continue
+
+                candidates.append(
+                    {
+                        "source_url": listing_url,
+                        "title": title,
+                        "price_hint": price,
+                    }
+                )
+
+                if len(candidates) >= needed:
+                    return candidates
 
     return candidates
 
@@ -533,6 +544,9 @@ def _extract_pap_detail_urls(soup: BeautifulSoup) -> list[str]:
             continue
         if "-r" not in href:
             continue
+        urls.append(_absolute_url(base, href.split("?")[0]))
+    raw_html = str(soup)
+    for href in re.findall(r"/annonces/appartement-[^\"' ]+-r\d+", raw_html, flags=re.IGNORECASE):
         urls.append(_absolute_url(base, href.split("?")[0]))
     return _dedupe_urls(urls)
 
@@ -755,7 +769,7 @@ async def scrape_live_listings(
     search_query: str,
     rounds_count: int,
     public_dir: Path,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> dict[str, Any]:
     target_count = max(rounds_count * SETTINGS.scrape_candidate_multiplier, rounds_count + 2)
     provider_order = _providers_order_for_query(search_query)
 
@@ -768,6 +782,8 @@ async def scrape_live_listings(
     collected: list[dict[str, Any]] = []
     seen_source: set[str] = set()
     used_providers: list[str] = []
+    provider_stats: list[dict[str, Any]] = []
+    errors: list[str] = []
 
     async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
         for provider in provider_order:
@@ -776,23 +792,41 @@ async def scrape_live_listings(
                 break
 
             used_providers.append(provider)
-            if provider == "pap":
-                batch = await _scrape_pap_rental_apartments(
-                    client=client,
-                    search_query=search_query,
-                    needed=max(remaining, rounds_count),
-                    public_dir=public_dir,
-                )
-            elif provider == "craigslist":
-                batch = await _scrape_craigslist_rental_apartments(
-                    client=client,
-                    search_query=search_query,
-                    needed=max(remaining, rounds_count),
-                    public_dir=public_dir,
-                )
-            else:
-                continue
+            needed = max(remaining, rounds_count)
+            stat: dict[str, Any] = {
+                "provider": provider,
+                "requested": needed,
+                "fetched": 0,
+                "accepted": 0,
+                "error": None,
+            }
 
+            try:
+                if provider == "pap":
+                    batch = await _scrape_pap_rental_apartments(
+                        client=client,
+                        search_query=search_query,
+                        needed=needed,
+                        public_dir=public_dir,
+                    )
+                elif provider == "craigslist":
+                    batch = await _scrape_craigslist_rental_apartments(
+                        client=client,
+                        search_query=search_query,
+                        needed=needed,
+                        public_dir=public_dir,
+                    )
+                else:
+                    batch = []
+                    stat["error"] = "provider_not_supported"
+            except Exception as exc:
+                batch = []
+                err_text = f"{provider}:{type(exc).__name__}:{exc}"
+                errors.append(err_text[:400])
+                stat["error"] = err_text[:200]
+
+            stat["fetched"] = len(batch)
+            accepted = 0
             for listing in batch:
                 source_url = str(listing.get("source_url") or "")
                 if source_url and source_url in seen_source:
@@ -800,8 +834,17 @@ async def scrape_live_listings(
                 if source_url:
                     seen_source.add(source_url)
                 collected.append(listing)
+                accepted += 1
+            stat["accepted"] = accepted
+            provider_stats.append(stat)
 
-    return collected, used_providers
+    return {
+        "listings": collected,
+        "providersTried": used_providers,
+        "providerStats": provider_stats,
+        "errors": errors,
+        "targetCount": target_count,
+    }
 
 
 async def scrape_and_store_live_listings(
@@ -813,11 +856,13 @@ async def scrape_and_store_live_listings(
 ) -> dict[str, Any]:
     _ = price_mode  # les annonces scrapees sont forcees en location appartement.
 
-    listings, providers = await scrape_live_listings(
+    scrape_debug = await scrape_live_listings(
         search_query=search_query,
         rounds_count=rounds_count,
         public_dir=public_dir,
     )
+    listings = list(scrape_debug["listings"])
+    providers = list(scrape_debug["providersTried"])
 
     inserted = 0
     listing_ids: list[str] = []
@@ -831,6 +876,11 @@ async def scrape_and_store_live_listings(
         "listingIds": listing_ids,
         "source": ",".join(providers),
         "query": search_query,
+        "providersTried": providers,
+        "providerStats": scrape_debug.get("providerStats", []),
+        "errors": scrape_debug.get("errors", []),
+        "targetCount": int(scrape_debug.get("targetCount", 0)),
+        "fetchedCount": len(listings),
     }
 
 
@@ -855,5 +905,10 @@ async def run_scrape_job(
         "skipped": 0,
         "source": result["source"],
         "query": result["query"],
+        "providersTried": result.get("providersTried", []),
+        "providerStats": result.get("providerStats", []),
+        "errors": result.get("errors", []),
+        "targetCount": int(result.get("targetCount", 0)),
+        "fetchedCount": int(result.get("fetchedCount", 0)),
         "message": "Scraping live terminé (appartements en location).",
     }

@@ -289,6 +289,7 @@ class RoomManager:
             mode=price_mode,
             exclude_ids=used_listing_ids,
         )
+        reused_seen_listings = False
 
         # Fallback: complète avec des annonces déjà en base (jamais vues dans cette room)
         # si le scraping live du moment n'est pas suffisant.
@@ -302,11 +303,21 @@ class RoomManager:
             )
             listings.extend(fallback_listings)
 
+        # Mode secours prod: si rien d'inédit n'est dispo, on autorise temporairement
+        # la réutilisation d'anciennes annonces pour ne pas bloquer le démarrage.
+        if len(listings) == 0:
+            listings = get_random_listings(
+                db_path=self.db_path,
+                count=rounds_count,
+                mode=price_mode,
+                exclude_ids=set(),
+            )
+            reused_seen_listings = len(listings) > 0
+
         if len(listings) == 0:
             raise ValueError(
-                "Pas assez de logements inédits disponibles pour cette room. "
-                f"Trouvé {len(listings)}/{rounds_count}. "
-                "Essaie une autre ville, réduis le nombre de manches, ou relance plus tard."
+                "Aucun logement disponible en base actuellement. "
+                "Relance un scraping admin ou redéploie le backend."
             )
 
         total_rounds_for_game = len(listings)
@@ -345,6 +356,7 @@ class RoomManager:
                     "source": scrape_result.get("source"),
                     "query": scrape_result.get("query"),
                     "fetchedCount": len(scraped_ids),
+                    "reusedSeenListings": reused_seen_listings,
                 },
             },
         )
