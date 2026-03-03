@@ -34,9 +34,9 @@ export async function ensureSocketConnected(): Promise<void> {
   });
 }
 
-export async function emitAck<T>(event: string, payload: unknown): Promise<T> {
+export async function emitAck<T>(event: string, payload: unknown, timeoutMs = 7000): Promise<T> {
   return await new Promise<T>((resolve, reject) => {
-    socket.timeout(7000).emit(event, payload, (err: unknown, response: T) => {
+    socket.timeout(timeoutMs).emit(event, payload, (err: unknown, response: T) => {
       if (err) {
         reject(new Error("Socket timeout"));
         return;

@@ -252,12 +252,17 @@ export function RoomPage() {
     setBusy(true);
     setError(null);
     try {
-      const ack = await emitAck<StartGameAck>(EVENTS.GAME_START, {});
+      const ack = await emitAck<StartGameAck>(EVENTS.GAME_START, {}, 90000);
       if (!ack.ok) {
         setError(ack.error ?? "Impossible de lancer la partie");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur socket");
+      const rawMessage = err instanceof Error ? err.message : "Erreur socket";
+      if (rawMessage.toLowerCase().includes("timeout")) {
+        setError("Le scraping prend trop de temps. Réessaie avec une autre ville ou attends quelques secondes.");
+      } else {
+        setError(rawMessage);
+      }
     } finally {
       setBusy(false);
     }
