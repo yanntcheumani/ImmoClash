@@ -12,7 +12,7 @@ import socketio
 
 from . import events
 from .config import SETTINGS
-from .db import get_listing_by_id, get_random_listings, get_random_listings_from_ids
+from .db import get_listing_by_id, get_random_listings
 from .models import HINT_KEYS, PRICE_MODES, Guess, Player, Room, RoomConfig, RoundState
 from .rules import compute_round_score, true_price_for_mode
 from .scraper import scrape_and_store_live_listings
@@ -27,6 +27,8 @@ class RoomManager:
         self.sid_index: dict[str, tuple[str, str]] = {}
         # one timer task per room (current round)
         self.room_tasks: dict[str, asyncio.Task] = {}
+        # one optional background scrape task per room
+        self.room_scrape_tasks: dict[str, asyncio.Task] = {}
         self.lock = asyncio.Lock()
         self.sio: socketio.AsyncServer | None = None
 
@@ -268,40 +270,15 @@ class RoomManager:
             # y compris après une relance de partie.
             used_listing_ids = set(room.used_listing_ids)
 
-        try:
-            scrape_result = await scrape_and_store_live_listings(
-                db_path=self.db_path,
-                public_dir=SETTINGS.public_dir,
-                search_query=search_query,
-                rounds_count=rounds_count,
-                price_mode=price_mode,
-            )
-        except Exception as exc:
-            raise ValueError(
-                "Echec du scraping live. Verifie la connexion internet ou change la zone de recherche."
-            ) from exc
-
-        scraped_ids = scrape_result["listingIds"]
-        listings = get_random_listings_from_ids(
+        # Démarrage robuste prod: ne jamais bloquer le start de partie sur le scraping.
+        # On sélectionne d'abord depuis la base locale, puis on scrape en arrière-plan.
+        listings = get_random_listings(
             db_path=self.db_path,
-            ids=scraped_ids,
             count=rounds_count,
             mode=price_mode,
             exclude_ids=used_listing_ids,
         )
         reused_seen_listings = False
-
-        # Fallback: complète avec des annonces déjà en base (jamais vues dans cette room)
-        # si le scraping live du moment n'est pas suffisant.
-        if len(listings) < rounds_count:
-            already_selected_ids = {listing.id for listing in listings}
-            fallback_listings = get_random_listings(
-                db_path=self.db_path,
-                count=rounds_count - len(listings),
-                mode=price_mode,
-                exclude_ids=used_listing_ids | already_selected_ids,
-            )
-            listings.extend(fallback_listings)
 
         # Mode secours prod: si rien d'inédit n'est dispo, on autorise temporairement
         # la réutilisation d'anciennes annonces pour ne pas bloquer le démarrage.
@@ -353,15 +330,59 @@ class RoomManager:
                 "totalRounds": rounds_count,
                 "timerSeconds": timer_seconds,
                 "scrape": {
-                    "source": scrape_result.get("source"),
-                    "query": scrape_result.get("query"),
-                    "fetchedCount": len(scraped_ids),
+                    "source": "background",
+                    "query": search_query,
+                    "fetchedCount": 0,
                     "reusedSeenListings": reused_seen_listings,
                 },
             },
         )
         await self.emit_room_state(room_code)
         await self._start_next_round(room_code)
+        self._schedule_background_scrape(
+            room_code=room_code,
+            search_query=search_query,
+            rounds_count=rounds_count,
+            price_mode=price_mode,
+        )
+
+    def _schedule_background_scrape(
+        self,
+        room_code: str,
+        search_query: str,
+        rounds_count: int,
+        price_mode: str,
+    ) -> None:
+        previous = self.room_scrape_tasks.get(room_code)
+        if previous and not previous.done():
+            previous.cancel()
+        self.room_scrape_tasks[room_code] = asyncio.create_task(
+            self._background_scrape_task(room_code, search_query, rounds_count, price_mode)
+        )
+
+    async def _background_scrape_task(
+        self,
+        room_code: str,
+        search_query: str,
+        rounds_count: int,
+        price_mode: str,
+    ) -> None:
+        try:
+            await scrape_and_store_live_listings(
+                db_path=self.db_path,
+                public_dir=SETTINGS.public_dir,
+                search_query=search_query,
+                rounds_count=max(3, rounds_count),
+                price_mode=price_mode,
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+        finally:
+            task = self.room_scrape_tasks.get(room_code)
+            if task and task.done():
+                self.room_scrape_tasks.pop(room_code, None)
 
     async def start_next_round(self, sid: str) -> dict[str, Any]:
         async with self.lock:

@@ -33,6 +33,8 @@ fastapi_app.add_middleware(
 SETTINGS.public_dir.mkdir(parents=True, exist_ok=True)
 fastapi_app.mount("/public", StaticFiles(directory=str(SETTINGS.public_dir)), name="public")
 
+MIN_RENT_LISTINGS_SEED = 30
+
 
 class LiveScrapeRequest(BaseModel):
     searchQuery: str = Field(default=SETTINGS.default_search_query, min_length=2, max_length=80)
@@ -182,70 +184,66 @@ def _seed_db_from_repo_json_if_empty() -> int:
     return inserted
 
 
-def _seed_builtin_fallback_if_empty() -> int:
+def _seed_builtin_fallback_if_needed(min_rent_count: int = MIN_RENT_LISTINGS_SEED) -> int:
     with connect(SETTINGS.db_path) as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM listings").fetchone()
-        if row and int(row["c"]) > 0:
-            return 0
+        row = conn.execute("SELECT COUNT(*) AS c FROM listings WHERE type = 'rent'").fetchone()
+        current_rent_count = int(row["c"]) if row else 0
 
-    fallback_listings: list[dict[str, object]] = [
-        {
-            "id": "fallback-rent-paris-01",
-            "title": "Appartement T2 calme proche transports",
-            "type": "rent",
-            "price": 1250,
-            "currency": "EUR",
-            "city": "Paris",
-            "country": "FR",
-            "address": "Paris",
-            "lat": 48.8566,
-            "lng": 2.3522,
-            "surface": 42,
-            "rooms": 2,
-            "dpe": "D",
-            "source_url": None,
-            "images": [],
-        },
-        {
-            "id": "fallback-rent-lyon-02",
-            "title": "Studio meublé centre-ville",
-            "type": "rent",
-            "price": 780,
-            "currency": "EUR",
-            "city": "Lyon",
-            "country": "FR",
-            "address": "Lyon",
-            "lat": 45.764,
-            "lng": 4.8357,
-            "surface": 24,
-            "rooms": 1,
-            "dpe": "C",
-            "source_url": None,
-            "images": [],
-        },
-        {
-            "id": "fallback-rent-bordeaux-03",
-            "title": "T3 lumineux avec balcon",
-            "type": "rent",
-            "price": 990,
-            "currency": "EUR",
-            "city": "Bordeaux",
-            "country": "FR",
-            "address": "Bordeaux",
-            "lat": 44.8378,
-            "lng": -0.5792,
-            "surface": 58,
-            "rooms": 3,
-            "dpe": "C",
-            "source_url": None,
-            "images": [],
-        },
-    ]
+        existing_auto_rows = conn.execute(
+            "SELECT id FROM listings WHERE id LIKE 'fallback-rent-auto-%'"
+        ).fetchall()
+
+    if current_rent_count >= min_rent_count:
+        return 0
+
+    existing_auto_ids = {str(row["id"]) for row in existing_auto_rows}
+    next_auto_index = 1
+    while f"fallback-rent-auto-{next_auto_index:03d}" in existing_auto_ids:
+        next_auto_index += 1
+
+    city_pool = (
+        ("Paris", 48.8566, 2.3522, 1180),
+        ("Lyon", 45.7640, 4.8357, 920),
+        ("Bordeaux", 44.8378, -0.5792, 980),
+        ("Toulouse", 43.6047, 1.4442, 890),
+        ("Nantes", 47.2184, -1.5536, 860),
+        ("Lille", 50.6292, 3.0573, 910),
+        ("Rennes", 48.1173, -1.6778, 840),
+        ("Montpellier", 43.6110, 3.8767, 870),
+        ("Strasbourg", 48.5734, 7.7521, 900),
+        ("Marseille", 43.2965, 5.3698, 930),
+    )
+    dpe_pool = ("A", "B", "C", "D", "E")
 
     inserted = 0
-    for listing in fallback_listings:
+    missing = max(0, min_rent_count - current_rent_count)
+    for offset in range(missing):
+        city, base_lat, base_lng, base_price = city_pool[(next_auto_index + offset) % len(city_pool)]
+        rooms = 1 + ((next_auto_index + offset) % 4)
+        surface = 19 + ((next_auto_index + offset) % 8) * 7 + rooms * 3
+        price = base_price + rooms * 65 + int(surface * 1.4) + ((next_auto_index + offset) % 5) * 35
+        dpe = dpe_pool[(next_auto_index + offset) % len(dpe_pool)]
+
+        listing = {
+            "id": f"fallback-rent-auto-{next_auto_index + offset:03d}",
+            "title": f"Location appartement {rooms} pieces {surface}m2 - {city}",
+            "type": "rent",
+            "price": float(price),
+            "currency": "EUR",
+            "city": city,
+            "country": "FR",
+            "address": city,
+            "lat": base_lat + ((offset % 5) - 2) * 0.004,
+            "lng": base_lng + ((offset % 7) - 3) * 0.004,
+            "surface": float(surface),
+            "rooms": rooms,
+            "dpe": dpe,
+            "source_url": None,
+            "images": [],
+        }
         upsert_listing(SETTINGS.db_path, listing)
         inserted += 1
+
     return inserted
 
 
@@ -255,7 +253,7 @@ async def on_startup() -> None:
     init_db(SETTINGS.db_path)
     _seed_db_from_repo_snapshot_if_empty()
     _seed_db_from_repo_json_if_empty()
-    _seed_builtin_fallback_if_empty()
+    _seed_builtin_fallback_if_needed()
 
 
 @fastapi_app.get("/api/health")
@@ -282,6 +280,7 @@ async def diagnostics() -> dict:
         "publicDirExists": SETTINGS.public_dir.exists(),
         "seedSnapshotDbExists": (SETTINGS.repo_root / "data" / "immo_clash.db").exists(),
         "seedJsonExists": (SETTINGS.repo_root / "data" / "listings.json").exists(),
+        "minRentSeedTarget": MIN_RENT_LISTINGS_SEED,
         "totalListings": int(total["c"]) if total else 0,
         "rentListings": int(rent["c"]) if rent else 0,
     }
@@ -301,6 +300,20 @@ async def admin_scrape(payload: LiveScrapeRequest) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@fastapi_app.post("/api/admin/seed-fallback")
+async def admin_seed_fallback() -> dict:
+    inserted = _seed_builtin_fallback_if_needed()
+    with connect(SETTINGS.db_path) as conn:
+        total = conn.execute("SELECT COUNT(*) as c FROM listings").fetchone()
+        rent = conn.execute("SELECT COUNT(*) as c FROM listings WHERE type='rent'").fetchone()
+    return {
+        "inserted": int(inserted),
+        "totalListings": int(total["c"]) if total else 0,
+        "rentListings": int(rent["c"]) if rent else 0,
+        "targetRentListings": MIN_RENT_LISTINGS_SEED,
+    }
 
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

@@ -87,7 +87,7 @@ Le repo contient `render.yaml` configure pour:
 - au premier demarrage si la DB persistante est vide:
   - seed automatique depuis `data/immo_clash.db` du repo
   - sinon seed automatique depuis `data/listings.json`
-  - sinon seed minimal integre (3 locations de secours)
+  - puis complementation automatique jusqu'a **30 locations minimum** (seed de secours)
   - copie automatique de `public/listings` vers le volume persistent
 
 Etapes:
@@ -172,6 +172,7 @@ score = max(0, round(1000 * exp(-3 * erreur%))) - malusIndices
 - `GET /api/admin/listings-count`
 - `GET /api/admin/diagnostics`
 - `POST /api/admin/scrape`
+- `POST /api/admin/seed-fallback`
 
 ## Socket.IO events (versionnes)
 
