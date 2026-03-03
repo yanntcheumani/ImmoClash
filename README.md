@@ -160,6 +160,7 @@ score = max(0, round(1000 * exp(-3 * erreur%))) - malusIndices
 
 - Providers implantes:
   - `pap` (principal pour FR)
+  - `craigslist_rss` (fallback robuste via flux RSS)
   - `craigslist` (fallback auto)
 - Fallback automatique: si un provider ne ramene pas assez d'annonces valides, le serveur passe au suivant.
 - Filtrage force: **appartements en location uniquement**.

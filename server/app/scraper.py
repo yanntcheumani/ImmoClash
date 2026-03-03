@@ -388,6 +388,24 @@ def _extract_lat_lng_from_craigslist(soup: BeautifulSoup, ld_items: list[dict[st
     return None, None
 
 
+def _craigslist_query_variants(search_query: str) -> list[str]:
+    city_only = search_query.split(",")[0].strip()
+    variants: list[str] = []
+    candidates = [
+        search_query.strip(),
+        city_only,
+        f"{city_only} apartment".strip(),
+        f"{city_only} appartement".strip(),
+        "",
+    ]
+    for candidate in candidates:
+        clean = candidate.strip()
+        if clean in variants:
+            continue
+        variants.append(clean)
+    return variants
+
+
 async def _scrape_craigslist_candidates(
     client: httpx.AsyncClient,
     search_query: str,
@@ -400,15 +418,7 @@ async def _scrape_craigslist_candidates(
     candidates: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
 
-    city_only = search_query.split(",")[0].strip()
-    query_variants = [search_query]
-    if city_only and city_only.lower() != search_query.lower():
-        query_variants.append(city_only)
-    if "apartment" not in search_query.lower():
-        query_variants.append(f"{city_only} apartment".strip())
-    if "appartement" not in search_query.lower():
-        query_variants.append(f"{city_only} appartement".strip())
-    query_variants = [query for query in query_variants if query]
+    query_variants = [query for query in _craigslist_query_variants(search_query) if query]
 
     for query in query_variants:
         for page_idx in range(SETTINGS.scrape_max_candidate_pages):
@@ -461,6 +471,61 @@ async def _scrape_craigslist_candidates(
 
                 if len(candidates) >= needed:
                     return candidates
+
+    return candidates
+
+
+async def _scrape_craigslist_candidates_rss(
+    client: httpx.AsyncClient,
+    search_query: str,
+    needed: int,
+) -> list[dict[str, Any]]:
+    site = _pick_craigslist_site(search_query)
+    base = f"https://{site}.craigslist.org"
+    category = "apa"  # apartment/housing rentals
+
+    candidates: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    for query in _craigslist_query_variants(search_query):
+        params = ["sort=date", "hasPic=1", "format=rss"]
+        if query:
+            params.append(f"query={quote_plus(query)}")
+        url = f"{base}/search/{category}?{'&'.join(params)}"
+
+        try:
+            response = await client.get(url)
+        except httpx.HTTPError:
+            continue
+
+        if response.status_code >= 400:
+            continue
+
+        rss = BeautifulSoup(response.text, "xml")
+        items = rss.select("item")
+        for item in items:
+            link_tag = item.find("link")
+            title_tag = item.find("title")
+            desc_tag = item.find("description")
+
+            listing_url = _normalize_scraped_url(link_tag.get_text(strip=True) if link_tag else "", base)
+            if not listing_url or listing_url in seen_urls:
+                continue
+            seen_urls.add(listing_url)
+
+            title = title_tag.get_text(" ", strip=True) if title_tag else "Annonce logement"
+            desc = desc_tag.get_text(" ", strip=True) if desc_tag else ""
+            price = _extract_monthly_rent_price(title) or _extract_monthly_rent_price(desc)
+
+            candidates.append(
+                {
+                    "source_url": listing_url,
+                    "title": title,
+                    "price_hint": price,
+                }
+            )
+            if len(candidates) >= needed:
+                return candidates
 
     return candidates
 
@@ -821,6 +886,27 @@ async def _scrape_craigslist_rental_apartments(
     return listings[:needed]
 
 
+async def _scrape_craigslist_rental_apartments_rss(
+    client: httpx.AsyncClient,
+    search_query: str,
+    needed: int,
+    public_dir: Path,
+) -> list[dict[str, Any]]:
+    candidates = await _scrape_craigslist_candidates_rss(client, search_query, needed=max(needed * 2, 20))
+    if not candidates:
+        return []
+
+    semaphore = asyncio.Semaphore(6)
+
+    async def _worker(candidate: dict[str, Any]) -> dict[str, Any] | None:
+        async with semaphore:
+            return await _hydrate_craigslist_listing(client, candidate, search_query, public_dir)
+
+    hydrated = await asyncio.gather(*[_worker(candidate) for candidate in candidates])
+    listings = [item for item in hydrated if item]
+    return listings[:needed]
+
+
 def _providers_order_for_query(search_query: str) -> tuple[str, ...]:
     country = _guess_country(search_query)
     if country == "FR":
@@ -867,6 +953,13 @@ async def scrape_live_listings(
             try:
                 if provider == "pap":
                     batch = await _scrape_pap_rental_apartments(
+                        client=client,
+                        search_query=search_query,
+                        needed=needed,
+                        public_dir=public_dir,
+                    )
+                elif provider == "craigslist_rss":
+                    batch = await _scrape_craigslist_rental_apartments_rss(
                         client=client,
                         search_query=search_query,
                         needed=needed,

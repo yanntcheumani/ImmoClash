@@ -15,8 +15,8 @@ class Settings:
     scrape_timeout_seconds: float = 10.0
     scrape_candidate_multiplier: int = 3
     scrape_max_candidate_pages: int = 2
-    scrape_providers_fr: tuple[str, ...] = ("pap", "craigslist")
-    scrape_providers_other: tuple[str, ...] = ("craigslist", "pap")
+    scrape_providers_fr: tuple[str, ...] = ("pap", "craigslist_rss", "craigslist")
+    scrape_providers_other: tuple[str, ...] = ("craigslist_rss", "craigslist", "pap")
     cors_origins: tuple[str, ...] = ("*",)
     scrape_user_agent: str = (
         "Mozilla/5.0 (X11; Linux x86_64) "
