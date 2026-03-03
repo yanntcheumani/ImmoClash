@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -195,9 +195,16 @@ def _extract_surface_rooms(text: str) -> tuple[float | None, int | None]:
     return surface, rooms
 
 
-async def _download_image(client: httpx.AsyncClient, image_url: str, dest_dir: Path, index: int) -> str | None:
+async def _download_image(
+    client: httpx.AsyncClient,
+    image_url: str,
+    dest_dir: Path,
+    index: int,
+    referer: str | None = None,
+) -> str | None:
     try:
-        response = await client.get(image_url)
+        headers = {"Referer": referer} if referer else None
+        response = await client.get(image_url, headers=headers)
     except httpx.HTTPError:
         return None
 
@@ -268,6 +275,19 @@ def _dedupe_urls(urls: list[str]) -> list[str]:
         seen.add(clean)
         result.append(clean)
     return result
+
+
+def _is_likely_image_url(url: str) -> bool:
+    return bool(re.search(r"\.(?:jpg|jpeg|png|webp)(?:\?|$)", url, flags=re.IGNORECASE))
+
+
+def _normalize_scraped_url(raw_url: str, base_url: str) -> str:
+    clean = (raw_url or "").strip()
+    if not clean:
+        return ""
+    if clean.startswith("//"):
+        return f"https:{clean}"
+    return urljoin(base_url, clean)
 
 
 def _best_srcset_url(srcset: str) -> str | None:
@@ -410,9 +430,11 @@ async def _scrape_craigslist_candidates(
             rows = soup.select("li.cl-search-result")
             if not rows:
                 rows = soup.select("li.result-row")
+            if not rows:
+                rows = soup.select("div.cl-search-result")
 
             for row in rows:
-                link_tag = row.select_one("a[href]")
+                link_tag = row.select_one("a.posting-title[href]") or row.select_one("a[href]")
                 if not link_tag:
                     continue
                 href = str(link_tag.get("href") or "").strip()
@@ -425,13 +447,9 @@ async def _scrape_craigslist_candidates(
                 seen_urls.add(listing_url)
 
                 title = link_tag.get_text(" ", strip=True) or "Annonce logement"
-                if not _is_rental_apartment_text(title):
-                    continue
 
-                price_tag = row.select_one(".price") or row.select_one(".result-price")
+                price_tag = row.select_one(".price") or row.select_one(".result-price") or row.select_one(".cl-price")
                 price = _parse_price(price_tag.get_text(" ", strip=True) if price_tag else "")
-                if not _is_plausible_rent_price(price):
-                    continue
 
                 candidates.append(
                     {
@@ -471,7 +489,8 @@ async def _hydrate_craigslist_listing(
         else str(candidate.get("title") or "Annonce logement")
     )
 
-    if not _is_rental_apartment_text(f"{title} {full_text[:300]}"):
+    lowered_sample = _normalize_text(f"{title} {full_text[:800]}")
+    if any(bad in lowered_sample for bad in _APT_NEGATIVE_HINTS):
         return None
 
     candidate_price = candidate.get("price_hint")
@@ -502,19 +521,26 @@ async def _hydrate_craigslist_listing(
         )
 
     image_urls = _dedupe_urls(image_urls)[:5]
-    if not image_urls:
-        return None
 
     listing_id = f"web-cl-{hashlib.sha1(source_url.encode('utf-8')).hexdigest()[:12]}"
     listing_dir = public_dir / "listings" / listing_id
     listing_dir.mkdir(parents=True, exist_ok=True)
 
-    downloads = await asyncio.gather(
-        *[_download_image(client, image_url, listing_dir, idx + 1) for idx, image_url in enumerate(image_urls)]
-    )
+    downloads: list[str | None] = []
+    if image_urls:
+        downloads = await asyncio.gather(
+            *[
+                _download_image(
+                    client,
+                    _normalize_scraped_url(image_url, source_url),
+                    listing_dir,
+                    idx + 1,
+                    referer=source_url,
+                )
+                for idx, image_url in enumerate(image_urls)
+            ]
+        )
     images = [f"listings/{listing_id}/{filename}" for filename in downloads if filename]
-    if not images:
-        return None
 
     return {
         "id": listing_id,
@@ -540,14 +566,20 @@ def _extract_pap_detail_urls(soup: BeautifulSoup) -> list[str]:
     base = "https://www.pap.fr"
     for link in soup.select("a[href]"):
         href = str(link.get("href") or "")
-        if "/annonces/appartement-" not in href:
+        lowered = href.lower()
+        if "/annonces/" not in lowered:
             continue
-        if "-r" not in href:
+        if "-r" not in lowered:
             continue
-        urls.append(_absolute_url(base, href.split("?")[0]))
+        if "appartement" not in lowered and "location" not in lowered:
+            continue
+        urls.append(_normalize_scraped_url(href.split("?")[0], base))
     raw_html = str(soup)
-    for href in re.findall(r"/annonces/appartement-[^\"' ]+-r\d+", raw_html, flags=re.IGNORECASE):
-        urls.append(_absolute_url(base, href.split("?")[0]))
+    for href in re.findall(r"/annonces/[^\"' ]+-r\d+", raw_html, flags=re.IGNORECASE):
+        lower_href = href.lower()
+        if "appartement" not in lower_href and "location" not in lower_href:
+            continue
+        urls.append(_normalize_scraped_url(href.split("?")[0], base))
     return _dedupe_urls(urls)
 
 
@@ -558,11 +590,12 @@ def _extract_pap_city_pages(soup: BeautifulSoup, search_query: str) -> list[str]
 
     for link in soup.select("a[href]"):
         href = str(link.get("href") or "")
-        if "/annonce/locations-appartement-" not in href:
+        lowered = href.lower()
+        if "/annonce/locations-appartement-" not in lowered and "/annonces/location-appartement-" not in lowered:
             continue
-        if "-g" not in href:
+        if "-g" not in lowered:
             continue
-        full = _absolute_url(base, href.split("?")[0])
+        full = _normalize_scraped_url(href.split("?")[0], base)
         pages.append(full)
 
     pages = _dedupe_urls(pages)
@@ -600,9 +633,13 @@ async def _hydrate_pap_listing(
     soup = BeautifulSoup(response.text, "html.parser")
     page_text = soup.get_text(" ", strip=True)
 
-    title = soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else "Annonce location"
-    if "location" not in _normalize_text(title):
-        return None
+    h1 = soup.select_one("h1")
+    og_title = soup.select_one('meta[property="og:title"]')
+    title = (
+        h1.get_text(" ", strip=True)
+        if h1
+        else (str(og_title.get("content") or "").strip() if og_title else "Annonce location")
+    )
     if not _is_rental_apartment_text(title):
         # URLs PAP ici sont déjà appartement, on garde un garde-fou anti colocation/chambre.
         if any(bad in _normalize_text(title) for bad in ("colocation", "chambre")):
@@ -612,6 +649,10 @@ async def _hydrate_pap_listing(
         return None
 
     price = _extract_monthly_rent_price(title)
+    if not _is_plausible_rent_price(price):
+        meta_price = soup.select_one('meta[property="product:price:amount"], meta[itemprop="price"]')
+        if meta_price:
+            price = _parse_price(str(meta_price.get("content") or ""))
     if not _is_plausible_rent_price(price):
         price = _extract_monthly_rent_price(page_text)
     if not _is_plausible_rent_price(price):
@@ -631,28 +672,41 @@ async def _hydrate_pap_listing(
     surface, rooms = _extract_surface_rooms(page_text)
 
     image_urls: list[str] = []
-    for link in soup.select('a[href*="cdn.pap.fr"]'):
+    domain_hints = ("pap.fr", "pap", "cdn")
+
+    for link in soup.select("a[href]"):
         href = str(link.get("href") or "").strip()
         if not href:
             continue
-        if not re.search(r"\.(?:jpg|jpeg|png|webp)(?:\?|$)", href, flags=re.IGNORECASE):
+        if _is_likely_image_url(href) and any(hint in href.lower() for hint in domain_hints):
+            image_urls.append(_normalize_scraped_url(href, detail_url))
+
+    for tag in soup.select("img, source"):
+        for attr in ("src", "data-src", "data-lazy-src"):
+            value = str(tag.get(attr) or "").strip()
+            if not value:
+                continue
+            normalized = _normalize_scraped_url(value, detail_url)
+            if _is_likely_image_url(normalized) and any(hint in normalized.lower() for hint in domain_hints):
+                image_urls.append(normalized)
+        for attr in ("srcset", "data-srcset"):
+            srcset = str(tag.get(attr) or "").strip()
+            if not srcset:
+                continue
+            best = _best_srcset_url(srcset)
+            if not best:
+                continue
+            normalized = _normalize_scraped_url(best, detail_url)
+            if _is_likely_image_url(normalized) and any(hint in normalized.lower() for hint in domain_hints):
+                image_urls.append(normalized)
+
+    for found in re.findall(r"https?://[^\"' >]+", response.text):
+        if not _is_likely_image_url(found):
             continue
-        image_urls.append(href)
+        if any(hint in found.lower() for hint in domain_hints):
+            image_urls.append(found)
 
-    if not image_urls:
-        for image in soup.select('img[src*="cdn.pap.fr"], img[srcset*="cdn.pap.fr"]'):
-            srcset = str(image.get("srcset") or "").strip()
-            if srcset:
-                best = _best_srcset_url(srcset)
-                if best and "cdn.pap.fr" in best:
-                    image_urls.append(best)
-            src = str(image.get("src") or "").strip()
-            if src and "cdn.pap.fr" in src:
-                image_urls.append(src)
-
-    image_urls = _dedupe_urls(image_urls)[:6]
-    if not image_urls:
-        return None
+    image_urls = _dedupe_urls(image_urls)[:8]
 
     lat, lng = await _geocode_city(client, city, country)
 
@@ -660,12 +714,21 @@ async def _hydrate_pap_listing(
     listing_dir = public_dir / "listings" / listing_id
     listing_dir.mkdir(parents=True, exist_ok=True)
 
-    downloads = await asyncio.gather(
-        *[_download_image(client, image_url, listing_dir, idx + 1) for idx, image_url in enumerate(image_urls)]
-    )
+    downloads: list[str | None] = []
+    if image_urls:
+        downloads = await asyncio.gather(
+            *[
+                _download_image(
+                    client,
+                    image_url,
+                    listing_dir,
+                    idx + 1,
+                    referer=detail_url,
+                )
+                for idx, image_url in enumerate(image_urls)
+            ]
+        )
     images = [f"listings/{listing_id}/{filename}" for filename in downloads if filename]
-    if not images:
-        return None
 
     return {
         "id": listing_id,
