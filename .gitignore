@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+server/.venv/
+
+# Node
+node_modules/
+client/node_modules/
+
+# Build
+client/dist/
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+.DS_Store

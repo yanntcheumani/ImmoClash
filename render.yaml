@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: immoclash-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r server/requirements.txt
+    startCommand: >-
+      bash -lc 'mkdir -p "$(dirname "$IMMOCLASH_DB_PATH")" "$IMMOCLASH_PUBLIC_DIR/listings" &&
+      uvicorn server.app.main:app --host 0.0.0.0 --port "$PORT"'
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: IMMOCLASH_DB_PATH
+        value: /var/data/immo_clash.db
+      - key: IMMOCLASH_PUBLIC_DIR
+        value: /var/data/public
+      - key: IMMOCLASH_DATA_DIR
+        value: /var/data
+      - key: IMMOCLASH_CORS_ORIGINS
+        value: "*"
+    disk:
+      name: immoclash-data
+      mountPath: /var/data
+      sizeGB: 5

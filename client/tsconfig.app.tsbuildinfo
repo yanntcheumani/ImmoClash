@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/Leaderboard.tsx","./src/components/ListingCarousel.tsx","./src/components/MiniMap.tsx","./src/lib/events.ts","./src/lib/runtime.ts","./src/lib/session.ts","./src/lib/socket.ts","./src/pages/LobbyPage.tsx","./src/pages/RoomPage.tsx"],"version":"5.9.3"}

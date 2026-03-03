@@ -1,0 +1,16 @@
+"""Socket.IO event names (versioned)."""
+
+ROOM_CREATE = "v1:room:create"
+ROOM_JOIN = "v1:room:join"
+PLAYER_RECONNECT = "v1:player:reconnect"
+GAME_START = "v1:game:start"
+ROUND_GUESS_SUBMIT = "v1:round:guess:submit"
+ROUND_HINT_REQUEST = "v1:round:hint:request"
+ROUND_NEXT = "v1:round:next"
+
+ROOM_STATE = "v1:room:state"
+GAME_STARTED = "v1:game:started"
+ROUND_STARTED = "v1:round:started"
+ROUND_RESULT = "v1:round:result"
+GAME_FINISHED = "v1:game:finished"
+ERROR = "v1:error"

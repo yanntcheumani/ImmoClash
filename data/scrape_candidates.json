@@ -1,0 +1,32 @@
+[
+  {
+    "id": "toulouse-rent-06",
+    "title": "T3 terrasse, quartier Saint-Cyprien",
+    "type": "rent",
+    "price": 1420,
+    "currency": "EUR",
+    "city": "Toulouse",
+    "country": "FR",
+    "lat": 43.599,
+    "lng": 1.428,
+    "surface": 63,
+    "rooms": 3,
+    "dpe": "C",
+    "images": ["main.jpg", "terrace.jpg"]
+  },
+  {
+    "id": "bordeaux-sale-07",
+    "title": "Duplex au coeur des Chartrons",
+    "type": "sale",
+    "price": 649000,
+    "currency": "EUR",
+    "city": "Bordeaux",
+    "country": "FR",
+    "lat": 44.853,
+    "lng": -0.566,
+    "surface": 94,
+    "rooms": 4,
+    "dpe": "D",
+    "images": ["main.jpg", "stairs.jpg", "living.jpg"]
+  }
+]
