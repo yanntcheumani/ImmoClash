@@ -12,7 +12,7 @@ import socketio
 
 from . import events
 from .config import SETTINGS
-from .db import get_listing_by_id, get_random_listings_from_ids
+from .db import get_listing_by_id, get_random_listings, get_random_listings_from_ids
 from .models import HINT_KEYS, PRICE_MODES, Guess, Player, Room, RoomConfig, RoundState
 from .rules import compute_round_score, true_price_for_mode
 from .scraper import scrape_and_store_live_listings
@@ -289,10 +289,24 @@ class RoomManager:
             mode=price_mode,
             exclude_ids=used_listing_ids,
         )
+
+        # Fallback: complète avec des annonces déjà en base (jamais vues dans cette room)
+        # si le scraping live du moment n'est pas suffisant.
+        if len(listings) < rounds_count:
+            already_selected_ids = {listing.id for listing in listings}
+            fallback_listings = get_random_listings(
+                db_path=self.db_path,
+                count=rounds_count - len(listings),
+                mode=price_mode,
+                exclude_ids=used_listing_ids | already_selected_ids,
+            )
+            listings.extend(fallback_listings)
+
         if len(listings) < rounds_count:
             raise ValueError(
-                "Le scraping n'a pas renvoyé assez de logements exploitables. "
-                "Les annonces déjà vues sont exclues: essaie une autre ville ou relance plus tard."
+                "Pas assez de logements inédits disponibles pour cette room. "
+                f"Trouvé {len(listings)}/{rounds_count}. "
+                "Essaie une autre ville, réduis le nombre de manches, ou relance plus tard."
             )
 
         async with self.lock:
